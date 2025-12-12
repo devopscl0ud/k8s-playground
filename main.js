@@ -27,6 +27,14 @@ document.addEventListener('DOMContentLoaded', function() {
     initializeApp();
     setupEventListeners();
     loadPageSpecificContent();
+    
+    // Initialize cluster integration if on playground page
+    if (window.location.pathname.includes('index.html') || window.location.pathname === '/' || !window.location.pathname.includes('.html')) {
+        const clusterIntegration = new K8sRealClusterIntegration();
+        clusterIntegration.initialize().catch(err => {
+            console.warn('Real cluster unavailable, using simulated mode');
+        });
+    }
 });
 
 // Application initialization

@@ -1,0 +1,381 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: k8s-playground
+  labels:
+    app: k8s-playground
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: k8s-playground-admin
+  namespace: k8s-playground
+  labels:
+    app: k8s-playground
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k8s-playground-admin
+  labels:
+    app: k8s-playground
+rules:
+# Nodes
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+
+# Namespaces
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list", "watch"]
+
+# Pods
+- apiGroups: [""]
+  resources: ["pods", "pods/logs"]
+  verbs: ["get", "list", "watch"]
+
+# Services
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list", "watch"]
+
+# Deployments
+- apiGroups: ["apps"]
+  resources: ["deployments", "deployments/scale"]
+  verbs: ["get", "list", "watch"]
+
+# ReplicaSets
+- apiGroups: ["apps"]
+  resources: ["replicasets"]
+  verbs: ["get", "list", "watch"]
+
+# StatefulSets
+- apiGroups: ["apps"]
+  resources: ["statefulsets"]
+  verbs: ["get", "list", "watch"]
+
+# DaemonSets
+- apiGroups: ["apps"]
+  resources: ["daemonsets"]
+  verbs: ["get", "list", "watch"]
+
+# Jobs & CronJobs
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list", "watch"]
+
+# ConfigMaps
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+
+# Secrets (read-only)
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list"]
+
+# Events
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k8s-playground-admin
+  labels:
+    app: k8s-playground
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: k8s-playground-admin
+subjects:
+- kind: ServiceAccount
+  name: k8s-playground-admin
+  namespace: k8s-playground
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k8s-playground-config
+  namespace: k8s-playground
+  labels:
+    app: k8s-playground
+data:
+  PORT: "3001"
+  NODE_ENV: "production"
+  RATE_LIMIT_WINDOW: "60000"
+  RATE_LIMIT_MAX: "100"
+  LOG_LEVEL: "info"
+  WS_UPDATE_INTERVAL: "5000"
+  ENABLE_REAL_CLUSTER: "true"
+  ENABLE_WEBSOCKET: "true"
+  CORS_ORIGIN: "*"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k8s-playground-backend
+  namespace: k8s-playground
+  labels:
+    app: k8s-playground
+    component: backend
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: k8s-playground
+      component: backend
+  template:
+    metadata:
+      labels:
+        app: k8s-playground
+        component: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3001"
+        prometheus.io/path: "/api/metrics"
+    spec:
+      serviceAccountName: k8s-playground-admin
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      
+      containers:
+      - name: backend
+        image: node:18-alpine
+        imagePullPolicy: IfNotPresent
+        workingDir: /app
+        command: ["npm", "start"]
+        
+        ports:
+        - name: http
+          containerPort: 3001
+          protocol: TCP
+        
+        env:
+        - name: PORT
+          valueFrom:
+            configMapKeyRef:
+              name: k8s-playground-config
+              key: PORT
+        - name: NODE_ENV
+          valueFrom:
+            configMapKeyRef:
+              name: k8s-playground-config
+              key: NODE_ENV
+        - name: RATE_LIMIT_WINDOW
+          valueFrom:
+            configMapKeyRef:
+              name: k8s-playground-config
+              key: RATE_LIMIT_WINDOW
+        - name: RATE_LIMIT_MAX
+          valueFrom:
+            configMapKeyRef:
+              name: k8s-playground-config
+              key: RATE_LIMIT_MAX
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: k8s-playground-config
+              key: LOG_LEVEL
+        - name: WS_UPDATE_INTERVAL
+          valueFrom:
+            configMapKeyRef:
+              name: k8s-playground-config
+              key: WS_UPDATE_INTERVAL
+        - name: CORS_ORIGIN
+          valueFrom:
+            configMapKeyRef:
+              name: k8s-playground-config
+              key: CORS_ORIGIN
+        
+        # Resource limits
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        
+        # Health checks
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 3001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 3001
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        
+        # Security context
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+        
+        # Volume mounts
+        volumeMounts:
+        - name: temp
+          mountPath: /tmp
+      
+      # Volumes
+      volumes:
+      - name: temp
+        emptyDir: {}
+      
+      # Affinity rules
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - k8s-playground
+                - key: component
+                  operator: In
+                  values:
+                  - backend
+              topologyKey: kubernetes.io/hostname
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: k8s-playground-backend
+  namespace: k8s-playground
+  labels:
+    app: k8s-playground
+    component: backend
+spec:
+  type: ClusterIP
+  selector:
+    app: k8s-playground
+    component: backend
+  ports:
+  - name: http
+    port: 3001
+    targetPort: 3001
+    protocol: TCP
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: k8s-playground-backend
+  namespace: k8s-playground
+  labels:
+    app: k8s-playground
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: k8s-playground-backend
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 30
+
+---
+apiVersion: v1
+kind: NetworkPolicy
+metadata:
+  name: k8s-playground-network-policy
+  namespace: k8s-playground
+  labels:
+    app: k8s-playground
+spec:
+  podSelector:
+    matchLabels:
+      app: k8s-playground
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: k8s-playground
+    - podSelector:
+        matchLabels:
+          app: k8s-playground
+    ports:
+    - protocol: TCP
+      port: 3001
+  egress:
+  # Allow DNS
+  - to:
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+  # Allow Kubernetes API
+  - to:
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          component: kube-apiserver
+    ports:
+    - protocol: TCP
+      port: 443
+  # Allow external HTTPS
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 443

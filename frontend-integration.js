@@ -2,13 +2,38 @@
 // This file extends the main.js functionality to connect with the backend API
 
 class K8sRealClusterIntegration {
-  constructor(backendUrl = 'http://localhost:3001') {
+  constructor(backendUrl = null) {
+    // Auto-detect backend URL for Codespaces
+    if (!backendUrl) {
+      backendUrl = this.getBackendUrl();
+    }
     this.backendUrl = backendUrl;
     this.socket = null;
     this.isConnected = false;
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 5;
     this.reconnectDelay = 1000;
+  }
+
+  // Detect correct backend URL based on environment
+  getBackendUrl() {
+    const isDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    
+    if (isDev) {
+      return 'http://localhost:3001';
+    }
+    
+    // In Codespaces or any subdomain environment
+    const hostname = window.location.hostname;
+    if (hostname.includes('app.github.dev') || hostname.includes('github.dev')) {
+      // Replace port 8000 in hostname with 3001 for backend
+      const backendHost = hostname.replace('-8000.', '-3001.');
+      const protocol = window.location.protocol;
+      return `${protocol}//${backendHost}`;
+    }
+    
+    // Fallback
+    return 'http://localhost:3001';
   }
 
   // Initialize the real cluster integration
