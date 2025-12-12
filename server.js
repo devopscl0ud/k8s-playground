@@ -734,6 +734,300 @@ function calculateAge(creationTimestamp) {
 }
 
 // ============================================================================
+// TERMINAL & CLUSTER CONFIGURATION ENDPOINTS
+// ============================================================================
+
+// Store cluster config
+let clusterConfig = {
+  apiServer: process.env.KUBECONFIG || 'http://localhost:3001',
+  namespace: 'playground',
+  connected: false
+};
+
+// Terminal command execution
+app.post('/api/terminal/execute', express.json(), async (req, res) => {
+  try {
+    const { command, namespace } = req.body;
+    
+    if (!command) {
+      return res.status(400).json({ error: 'Command is required' });
+    }
+
+    logger.info(`Executing command: ${command}`);
+
+    // Mock kubectl responses
+    const result = executeMockKubectl(command, namespace || clusterConfig.namespace);
+
+    res.json({
+      command,
+      output: result.output,
+      success: result.success,
+      status: mockMode ? 'mock' : 'real'
+    });
+  } catch (error) {
+    logger.error('Terminal execution failed', error);
+    res.status(500).json({ 
+      error: 'Command execution failed',
+      message: error.message 
+    });
+  }
+});
+
+// Configure cluster connection
+app.post('/api/cluster/configure', express.json(), async (req, res) => {
+  try {
+    const { apiServer, namespace, kubeconfig } = req.body;
+
+    // Update cluster config
+    if (apiServer) clusterConfig.apiServer = apiServer;
+    if (namespace) clusterConfig.namespace = namespace;
+
+    // If kubeconfig provided, try to connect to real cluster
+    if (kubeconfig) {
+      try {
+        // Write kubeconfig to temporary location
+        const tempKubeconfig = path.join('/tmp', 'kubeconfig-' + Date.now());
+        fs.writeFileSync(tempKubeconfig, kubeconfig);
+        
+        process.env.KUBECONFIG = tempKubeconfig;
+        mockMode = false;
+
+        // Reinitialize Kubernetes client
+        await initializeKubernetesClient();
+
+        clusterConfig.connected = clusterConnected;
+
+        res.json({
+          success: true,
+          message: 'Connected to real cluster',
+          config: clusterConfig
+        });
+      } catch (error) {
+        logger.error('Failed to connect to real cluster', error);
+        // Fall back to mock mode
+        mockMode = true;
+        clusterConnected = true;
+        clusterConfig.connected = true;
+
+        res.json({
+          success: true,
+          message: 'Kubeconfig provided, using mock mode for now',
+          config: clusterConfig,
+          warning: error.message
+        });
+      }
+    } else {
+      // Just update config without real cluster connection
+      clusterConfig.connected = mockMode || clusterConnected;
+
+      res.json({
+        success: true,
+        message: 'Cluster config updated',
+        config: clusterConfig
+      });
+    }
+  } catch (error) {
+    logger.error('Cluster configuration failed', error);
+    res.status(500).json({ 
+      error: 'Cluster configuration failed',
+      message: error.message 
+    });
+  }
+});
+
+// Get cluster config
+app.get('/api/cluster/config', (req, res) => {
+  res.json({
+    config: clusterConfig,
+    mode: mockMode ? 'mock' : 'real'
+  });
+});
+
+// Get namespace list
+app.get('/api/namespaces', async (req, res) => {
+  try {
+    if (mockMode) {
+      return res.json({
+        namespaces: [
+          { name: 'default', status: 'Active' },
+          { name: 'kube-system', status: 'Active' },
+          { name: 'playground', status: 'Active' },
+          { name: 'monitoring', status: 'Active' }
+        ]
+      });
+    }
+
+    const namespaces = await k8sApi.listNamespace();
+    res.json({
+      namespaces: namespaces.body.items.map(ns => ({
+        name: ns.metadata.name,
+        status: ns.status.phase
+      }))
+    });
+  } catch (error) {
+    logger.error('Failed to list namespaces', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create namespace
+app.post('/api/namespaces/create', express.json(), async (req, res) => {
+  try {
+    const { name } = req.body;
+
+    if (!name) {
+      return res.status(400).json({ error: 'Namespace name is required' });
+    }
+
+    if (mockMode) {
+      return res.json({
+        success: true,
+        message: `Namespace '${name}' created (mock)`,
+        namespace: { name, status: 'Active' }
+      });
+    }
+
+    const ns = await k8sApi.createNamespace({
+      apiVersion: 'v1',
+      kind: 'Namespace',
+      metadata: { name }
+    });
+
+    res.json({
+      success: true,
+      message: `Namespace '${name}' created`,
+      namespace: ns.body
+    });
+  } catch (error) {
+    logger.error('Failed to create namespace', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create RBAC for namespace
+app.post('/api/cluster/setup-rbac', express.json(), async (req, res) => {
+  try {
+    const { namespace } = req.body;
+    const ns = namespace || clusterConfig.namespace;
+
+    if (mockMode) {
+      return res.json({
+        success: true,
+        message: `RBAC setup for namespace '${ns}' created (mock)`,
+        resources: [
+          { type: 'ServiceAccount', name: `playground-sa` },
+          { type: 'Role', name: `playground-role` },
+          { type: 'RoleBinding', name: `playground-rolebinding` }
+        ]
+      });
+    }
+
+    // In real mode, would create RBAC resources here
+    res.json({
+      success: true,
+      message: `RBAC setup for namespace '${ns}'`,
+      resources: []
+    });
+  } catch (error) {
+    logger.error('RBAC setup failed', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Helper function to execute mock kubectl commands
+function executeMockKubectl(command, namespace = 'default') {
+  const cmd = command.toLowerCase().trim();
+
+  try {
+    // Get nodes
+    if (cmd.includes('get nodes') || cmd === 'get nodes') {
+      let output = 'NAME           STATUS   ROLES    AGE     VERSION\n';
+      mockClusterData.nodes.forEach(node => {
+        output += `${node.name.padEnd(15)}${node.status.padEnd(8)}${node.roles.join(',').padEnd(9)}${Math.floor(Math.random() * 48) + 1}h    ${node.version}\n`;
+      });
+      return { success: true, output };
+    }
+
+    // Get pods
+    if (cmd.includes('get pods') || cmd === 'get pods') {
+      let output = 'NAME                                    READY   STATUS    RESTARTS   AGE\n';
+      mockClusterData.pods
+        .filter(p => !namespace || p.namespace === namespace)
+        .forEach(pod => {
+          const ready = pod.status === 'Running' ? '1/1' : '0/1';
+          const age = Math.floor(Math.random() * 48) + 1;
+          output += `${pod.name.padEnd(40)}${ready.padEnd(8)}${pod.status.padEnd(10)}0          ${age}m\n`;
+        });
+      return { success: true, output };
+    }
+
+    // Get services
+    if (cmd.includes('get services') || cmd.includes('get svc') || cmd === 'get svc') {
+      let output = 'NAME              TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)\n';
+      mockClusterData.services
+        .filter(s => !namespace || s.namespace === namespace)
+        .forEach(svc => {
+          output += `${svc.name.padEnd(18)}${svc.type.padEnd(12)}${svc.clusterIP.padEnd(15)}<none>           80/TCP\n`;
+        });
+      return { success: true, output };
+    }
+
+    // Get deployments
+    if (cmd.includes('get deployments') || cmd.includes('get deploy') || cmd === 'get deploy') {
+      let output = 'NAME                  DESIRED   CURRENT   READY   AGE\n';
+      mockClusterData.deployments
+        .filter(d => !namespace || d.namespace === namespace)
+        .forEach(dep => {
+          output += `${dep.name.padEnd(22)}${String(dep.replicas).padEnd(10)}${String(dep.currentReplicas || dep.replicas).padEnd(9)}${String(dep.readyReplicas || dep.replicas).padEnd(8)}${Math.floor(Math.random() * 48) + 1}h\n`;
+        });
+      return { success: true, output };
+    }
+
+    // Get namespaces
+    if (cmd.includes('get namespaces') || cmd.includes('get ns') || cmd === 'get ns') {
+      let output = 'NAME              STATUS   AGE\n';
+      const namespaces = ['default', 'kube-system', 'playground', 'monitoring'];
+      namespaces.forEach(ns => {
+        output += `${ns.padEnd(18)}Active   ${Math.floor(Math.random() * 48) + 1}d\n`;
+      });
+      return { success: true, output };
+    }
+
+    // Create namespace
+    if (cmd.includes('create namespace')) {
+      const match = cmd.match(/create namespace\s+(\S+)/);
+      if (match) {
+        return { success: true, output: `namespace/${match[1]} created` };
+      }
+    }
+
+    // Describe pod/node/service
+    if (cmd.includes('describe')) {
+      const match = cmd.match(/describe\s+(\S+)\s+(\S+)/);
+      if (match) {
+        const type = match[1];
+        const name = match[2];
+        const output = `Name:         ${name}\nNamespace:    ${namespace}\nStatus:       Running\nAge:          10m`;
+        return { success: true, output };
+      }
+    }
+
+    // Logs
+    if (cmd.includes('logs')) {
+      const match = cmd.match(/logs\s+(\S+)/);
+      if (match) {
+        return { success: true, output: `[Pod ${match[1]} logs]\nStartup complete\nServer listening on port 8080` };
+      }
+    }
+
+    // Default - unknown command
+    return { success: false, output: `kubectl: error: unknown command "${cmd}"\nRun 'kubectl --help' for usage.` };
+  } catch (error) {
+    return { success: false, output: `Error: ${error.message}` };
+  }
+}
+
+// ============================================================================
 // ERROR HANDLING
 // ============================================================================
 

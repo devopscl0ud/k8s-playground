@@ -177,6 +177,12 @@ function setupPlaygroundListeners() {
         deployPod.addEventListener('click', deployCustomPod);
     }
     
+    // Terminal setup
+    setupTerminal();
+    
+    // Cluster configuration
+    setupClusterConfig();
+    
     // Canvas controls
     const zoomIn = document.getElementById('zoom-in');
     const zoomOut = document.getElementById('zoom-out');
@@ -1265,6 +1271,234 @@ const securityContext = `securityContext:
     drop:
     - ALL`;
 
+// ============================================================================
+// TERMINAL FUNCTIONALITY
+// ============================================================================
+
+function setupTerminal() {
+    const terminalInput = document.getElementById('terminal-input');
+    const terminalSubmit = document.getElementById('terminal-submit');
+    const clearTerminal = document.getElementById('clear-terminal');
+    
+    if (!terminalInput) return;
+    
+    // Execute command on Enter key
+    terminalInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            executeTerminalCommand();
+        }
+    });
+    
+    // Execute button click
+    if (terminalSubmit) {
+        terminalSubmit.addEventListener('click', executeTerminalCommand);
+    }
+    
+    // Clear terminal
+    if (clearTerminal) {
+        clearTerminal.addEventListener('click', function() {
+            const output = document.getElementById('terminal-output');
+            if (output) {
+                output.innerHTML = '<div class="terminal-line text-gray-500">// Terminal cleared</div>';
+            }
+        });
+    }
+}
+
+async function executeTerminalCommand() {
+    const input = document.getElementById('terminal-input');
+    const output = document.getElementById('terminal-output');
+    const backendUrl = getBackendUrl();
+    
+    if (!input || !input.value.trim()) {
+        return;
+    }
+    
+    const command = input.value.trim();
+    
+    // Add command to output
+    const cmdLine = document.createElement('div');
+    cmdLine.className = 'terminal-line';
+    cmdLine.innerHTML = `<span class="text-blue-300">$</span> ${escapeHtml(command)}`;
+    output.appendChild(cmdLine);
+    
+    try {
+        const response = await fetch(`${backendUrl}/api/terminal/execute`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                command: command,
+                namespace: document.getElementById('namespace-input')?.value || 'default'
+            })
+        });
+        
+        const data = await response.json();
+        
+        // Add output lines
+        if (data.output) {
+            data.output.split('\n').forEach(line => {
+                if (line.trim()) {
+                    const outputLine = document.createElement('div');
+                    outputLine.className = `terminal-line ${data.success ? '' : 'terminal-error'}`;
+                    outputLine.textContent = line;
+                    output.appendChild(outputLine);
+                }
+            });
+        }
+    } catch (error) {
+        const errorLine = document.createElement('div');
+        errorLine.className = 'terminal-line terminal-error';
+        errorLine.textContent = `Error: ${error.message}`;
+        output.appendChild(errorLine);
+    }
+    
+    // Clear input and scroll to bottom
+    input.value = '';
+    output.scrollTop = output.scrollHeight;
+}
+
+// ============================================================================
+// CLUSTER CONFIGURATION
+// ============================================================================
+
+function setupClusterConfig() {
+    const connectBtn = document.getElementById('connect-cluster');
+    
+    if (connectBtn) {
+        connectBtn.addEventListener('click', configureCluster);
+    }
+    
+    // Load initial config
+    loadClusterConfig();
+}
+
+async function configureCluster() {
+    const apiServer = document.getElementById('api-server')?.value;
+    const namespace = document.getElementById('namespace-input')?.value;
+    const statusBadge = document.getElementById('cluster-status');
+    const backendUrl = getBackendUrl();
+    
+    if (!namespace) {
+        showNotification('Namespace is required', 'error');
+        return;
+    }
+    
+    try {
+        statusBadge.innerHTML = '<span class="status-badge status-connecting">Connecting...</span>';
+        
+        const response = await fetch(`${backendUrl}/api/cluster/configure`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                apiServer: apiServer,
+                namespace: namespace
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            statusBadge.innerHTML = '<span class="status-badge status-connected">Connected</span>';
+            showNotification(`Cluster configured for namespace: ${namespace}`, 'success');
+            
+            // Setup namespace with RBAC
+            setupNamespaceRBAC(namespace);
+        } else {
+            statusBadge.innerHTML = '<span class="status-badge status-disconnected">Error</span>';
+            showNotification(`Configuration failed: ${data.message}`, 'error');
+        }
+    } catch (error) {
+        statusBadge.innerHTML = '<span class="status-badge status-disconnected">Error</span>';
+        showNotification(`Configuration error: ${error.message}`, 'error');
+    }
+}
+
+async function setupNamespaceRBAC(namespace) {
+    const backendUrl = getBackendUrl();
+    
+    try {
+        // Create namespace
+        const createNsResponse = await fetch(`${backendUrl}/api/namespaces/create`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: namespace })
+        });
+        
+        // Setup RBAC
+        const rbacResponse = await fetch(`${backendUrl}/api/cluster/setup-rbac`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ namespace: namespace })
+        });
+        
+        const rbacData = await rbacResponse.json();
+        
+        if (rbacData.success) {
+            showNotification(`Namespace '${namespace}' setup complete with RBAC`, 'success');
+            
+            // Add output to terminal
+            const output = document.getElementById('terminal-output');
+            if (output) {
+                const line = document.createElement('div');
+                line.className = 'terminal-line terminal-success';
+                line.innerHTML = `✓ Namespace '${namespace}' configured with RBAC</span>`;
+                output.appendChild(line);
+            }
+        }
+    } catch (error) {
+        console.error('RBAC setup error:', error);
+    }
+}
+
+async function loadClusterConfig() {
+    const backendUrl = getBackendUrl();
+    
+    try {
+        const response = await fetch(`${backendUrl}/api/cluster/config`);
+        const data = await response.json();
+        
+        if (data.config) {
+            const statusBadge = document.getElementById('cluster-status');
+            if (statusBadge) {
+                const status = data.config.connected ? 'status-connected' : 'status-disconnected';
+                const text = data.config.connected ? 'Connected' : 'Disconnected';
+                statusBadge.innerHTML = `<span class="status-badge ${status}">${text}</span>`;
+            }
+            
+            const modeDisplay = document.getElementById('terminal-mode');
+            if (modeDisplay) {
+                modeDisplay.textContent = data.mode === 'real' ? 'Real Cluster' : 'Mock Mode';
+            }
+        }
+    } catch (error) {
+        console.error('Failed to load cluster config:', error);
+    }
+}
+
+function getBackendUrl() {
+    // Auto-detect for Codespaces or use localhost
+    const isDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    
+    if (isDev) {
+        return 'http://localhost:3001';
+    }
+    
+    const hostname = window.location.hostname;
+    if (hostname.includes('app.github.dev') || hostname.includes('github.dev')) {
+        const backendHost = hostname.replace('-8000.', '-3001.');
+        const protocol = window.location.protocol;
+        return `${protocol}//${backendHost}`;
+    }
+    
+    return 'http://localhost:3001';
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 // Export for global access
 window.K8sPlayground = {
     AppState,
@@ -1274,5 +1508,8 @@ window.K8sPlayground = {
     deployApplication,
     createKubernetesService,
     startTutorial,
-    switchCategory
+    switchCategory,
+    executeTerminalCommand,
+    configureCluster,
+    setupNamespaceRBAC
 };
