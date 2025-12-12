@@ -1,0 +1,77 @@
+# Cloud Run Deployment Configuration
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: k8s-playground-backend
+  namespace: default
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/execution-environment: gen2
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/maxScale: "10"
+        autoscaling.knative.dev/minScale: "1"
+        run.googleapis.com/cpu-throttle: "false"
+        run.googleapis.com/memory: "512Mi"
+        run.googleapis.com/cpu: "1000m"
+    spec:
+      containerConcurrency: 100
+      timeoutSeconds: 300
+      serviceAccountName: k8s-playground-sa@YOUR_PROJECT_ID.iam.gserviceaccount.com
+      containers:
+      - image: gcr.io/YOUR_PROJECT_ID/k8s-playground-backend:latest
+        ports:
+        - containerPort: 3001
+          name: http1
+        env:
+        - name: PORT
+          value: "3001"
+        - name: NODE_ENV
+          value: "production"
+        - name: ENABLE_REAL_CLUSTER
+          value: "true"
+        - name: ENABLE_WEBSOCKET
+          value: "true"
+        - name: RATE_LIMIT_MAX
+          value: "100"
+        - name: SESSION_TIMEOUT
+          value: "1800000"
+        resources:
+          limits:
+            cpu: "1000m"
+            memory: "512Mi"
+          requests:
+            cpu: "500m"
+            memory: "256Mi"
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 3001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 3001
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+
+---
+# IAM Policy for Cloud Run Service Account
+apiVersion: iam.cnrm.cloud.google.com/v1beta1
+kind: IAMPolicyMember
+metadata:
+  name: k8s-playground-backend-iam
+spec:
+  member: serviceAccount:k8s-playground-sa@YOUR_PROJECT_ID.iam.gserviceaccount.com
+  role: roles/run.invoker
+  resourceRef:
+    apiVersion: serving.knative.dev/v1
+    kind: Service
+    name: k8s-playground-backend
