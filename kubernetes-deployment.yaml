@@ -155,7 +155,8 @@ spec:
       
       containers:
       - name: backend
-        image: node:18-alpine
+        # Replace the image with your registry image. Jenkins will set a tagged image at deploy time.
+        image: venky2222/k8s-playground-backend:REPLACE_ME
         imagePullPolicy: IfNotPresent
         workingDir: /app
         command: ["npm", "start"]
@@ -201,6 +202,9 @@ spec:
             configMapKeyRef:
               name: k8s-playground-config
               key: CORS_ORIGIN
+
+        imagePullSecrets:
+        - name: registry-credentials
         
         # Resource limits
         resources:
@@ -373,6 +377,43 @@ spec:
     ports:
     - protocol: TCP
       port: 443
+
+---
+# Optional: imagePullSecret for private registries
+apiVersion: v1
+kind: Secret
+metadata:
+  name: registry-credentials
+  namespace: k8s-playground
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: "REPLACE_WITH_BASE64_DOCKERCONFIGJSON"
+
+---
+# Optional: Secrets manifest for sensitive environment variables
+apiVersion: v1
+kind: Secret
+metadata:
+  name: k8s-playground-secrets
+  namespace: k8s-playground
+type: Opaque
+stringData:
+  DATABASE_URL: "REPLACE_DB_URL"
+  API_KEY: "REPLACE_API_KEY"
+
+---
+# PodDisruptionBudget to ensure availability during drains
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: k8s-playground-pdb
+  namespace: k8s-playground
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: k8s-playground
+      component: backend
   # Allow external HTTPS
   - to:
     - namespaceSelector: {}
