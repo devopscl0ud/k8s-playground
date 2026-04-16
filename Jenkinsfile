@@ -1,6 +1,11 @@
 pipeline {
   agent any
 
+  triggers {
+    // Requires GitHub plugin: triggers pipeline on push via GitHub webhook
+    githubPush()
+  }
+
   environment {
     IMAGE_NAME = "k8s-playground-backend"
     NAMESPACE = "k8s-playground"
@@ -20,6 +25,34 @@ pipeline {
       }
     }
 
+    stage('Validate Deployment Prerequisites') {
+      steps {
+        script {
+          echo "🔍 Validating deployment prerequisites..."
+          withCredentials([file(credentialsId: 'kubeconfig-credentials', variable: 'KUBECONFIG_FILE')]) {
+            sh '''
+              set -e
+              echo "✓ kubeconfig-credentials are available"
+              
+              echo "🔍 Testing kubectl connectivity..."
+              if ! kubectl --kubeconfig ${KUBECONFIG_FILE} cluster-info > /dev/null 2>&1; then
+                echo "❌ ERROR: Cannot connect to Kubernetes cluster with provided kubeconfig"
+                exit 1
+              fi
+              echo "✓ Successfully connected to Kubernetes cluster"
+              
+              echo "🔍 Verifying registry credentials configuration..."
+              if [ -z "${REGISTRY}" ]; then
+                echo "❌ ERROR: REGISTRY parameter is not set"
+                exit 1
+              fi
+              echo "✓ Registry configured: ${REGISTRY}"
+            '''
+          }
+        }
+      }
+    }
+
     stage('Build & Push Image') {
       steps {
         script {
@@ -27,10 +60,17 @@ pipeline {
           env.IMAGE_TAG = "${env.BUILD_NUMBER}-${shortSha}"
           env.IMAGE = "${params.REGISTRY}/${env.IMAGE_NAME}:${env.IMAGE_TAG}"
 
+          echo "🔨 Building image: ${env.IMAGE}"
+          sh "docker build -t ${env.IMAGE} ."
+          
+          echo "📤 Pushing image to registry..."
           withCredentials([usernamePassword(credentialsId: 'docker-hub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-            sh "docker build -t ${env.IMAGE} ."
-            sh "echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin ${params.REGISTRY}"
-            sh "docker push ${env.IMAGE}"
+            sh '''
+              echo "🔐 Logging into registry..."
+              echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin ${REGISTRY}
+              docker push ${IMAGE}
+              echo "✅ Image pushed: ${IMAGE}"
+            '''
           }
         }
       }
@@ -40,8 +80,36 @@ pipeline {
       steps {
         script {
           withCredentials([file(credentialsId: 'kubeconfig-credentials', variable: 'KUBECONFIG_FILE')]) {
-            sh "kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${env.NAMESPACE} set image deployment/k8s-playground-backend backend=${env.IMAGE}"
-            sh "kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${env.NAMESPACE} rollout status deployment/k8s-playground-backend --timeout=3m"
+            sh '''
+              set -e
+              echo "🔧 Verifying cluster connection..."
+              kubectl --kubeconfig ${KUBECONFIG_FILE} cluster-info
+              
+              echo "📦 Creating namespace if it doesn't exist..."
+              kubectl --kubeconfig ${KUBECONFIG_FILE} create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+              
+              echo "🔍 Checking if deployment exists..."
+              DEPLOYMENT_EXISTS=$(kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${NAMESPACE} get deployment k8s-playground-backend --no-headers 2>/dev/null | wc -l)
+              
+              if [ $DEPLOYMENT_EXISTS -eq 0 ]; then
+                echo "📥 Deployment not found. Applying initial configuration from kubernetes-deployment.yaml..."
+                kubectl --kubeconfig ${KUBECONFIG_FILE} apply -f kubernetes-deployment.yaml
+                echo "⏳ Waiting for deployment to be created..."
+                sleep 5
+              else
+                echo "✅ Deployment already exists"
+              fi
+              
+              echo "🐳 Updating deployment image to: ${IMAGE}"
+              kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${NAMESPACE} set image deployment/k8s-playground-backend backend=${IMAGE}
+              
+              echo "⏳ Waiting for rollout to complete (timeout: 5m)..."
+              kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${NAMESPACE} rollout status deployment/k8s-playground-backend --timeout=5m
+              
+              echo "✅ Deployment successful!"
+              echo "Pod status:"
+              kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${NAMESPACE} get pods -l app=k8s-playground,component=backend
+            '''
           }
         }
       }
@@ -54,10 +122,32 @@ pipeline {
 
   post {
     success {
-      echo "Deployed ${env.IMAGE} to ${env.NAMESPACE}"
+      echo """
+      ✅ PIPELINE SUCCEEDED
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      Image: ${env.IMAGE}
+      Namespace: ${env.NAMESPACE}
+      Deployment: k8s-playground-backend
+      Build: ${env.BUILD_NUMBER}
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      """
     }
     failure {
-      echo 'Build or deployment failed.'
+      echo """
+      ❌ PIPELINE FAILED
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      Build ID: ${env.BUILD_NUMBER}
+      Image: ${env.IMAGE}
+      Namespace: ${env.NAMESPACE}
+      
+      📋 Troubleshooting steps:
+      1. Verify kubeconfig-credentials are set in Jenkins
+      2. Check kubectl can connect to cluster with the kubeconfig
+      3. Ensure docker-hub-creds have valid Docker Hub token
+      4. Review pod logs: kubectl -n ${env.NAMESPACE} logs -l app=k8s-playground
+      5. Check deployment status: kubectl -n ${env.NAMESPACE} describe deployment k8s-playground-backend
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      """
     }
   }
 }
