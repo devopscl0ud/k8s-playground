@@ -9,6 +9,8 @@ pipeline {
   environment {
     IMAGE_NAME = "k8s-playground-backend"
     NAMESPACE = "k8s-playground"
+    KUBECONFIG_PATH = "/tmp/kubeconfig"
+    PROXY_PORT = "8001"
   }
 
   stages {
@@ -52,8 +54,12 @@ pipeline {
               set -e
               echo "✓ kubeconfig-credentials are available"
               
+              # Copy kubeconfig to a known location
+              cp "${KUBECONFIG_FILE}" ${KUBECONFIG_PATH}
+              export KUBECONFIG=${KUBECONFIG_PATH}
+              
               echo "🔍 Testing kubectl connectivity..."
-              if ! kubectl --kubeconfig ${KUBECONFIG_FILE} cluster-info > /dev/null 2>&1; then
+              if ! kubectl cluster-info > /dev/null 2>&1; then
                 echo "❌ ERROR: Cannot connect to Kubernetes cluster with provided kubeconfig"
                 exit 1
               fi
@@ -100,18 +106,42 @@ pipeline {
           withCredentials([file(credentialsId: 'kubeconfig-credentials', variable: 'KUBECONFIG_FILE')]) {
             sh '''
               set -e
-              echo "🔧 Verifying cluster connection..."
-              kubectl --kubeconfig ${KUBECONFIG_FILE} cluster-info
+              echo "🔧 Setting up authenticated kubectl proxy..."
+              
+              # Copy kubeconfig to a known location
+              cp "${KUBECONFIG_FILE}" ${KUBECONFIG_PATH}
+              export KUBECONFIG=${KUBECONFIG_PATH}
+              
+              # Start kubectl proxy in background to handle authentication
+              echo "Starting kubectl proxy on port ${PROXY_PORT}..."
+              kubectl proxy --port=${PROXY_PORT} --address=0.0.0.0 --disable-filter=true &
+              PROXY_PID=$!
+              
+              # Give proxy time to start
+              sleep 3
+              
+              # Verify proxy is running
+              if ! curl -s http://localhost:${PROXY_PORT}/api/ > /dev/null; then
+                echo "❌ ERROR: Failed to start kubectl proxy"
+                kill $PROXY_PID 2>/dev/null || true
+                exit 1
+              fi
+              echo "✓ kubectl proxy is running"
               
               echo "📦 Creating namespace if it doesn't exist..."
-              kubectl --kubeconfig ${KUBECONFIG_FILE} create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply --validate=false -f -
+              # Use localhost proxy for all kubectl commands
+              curl -s -X POST -H "Content-Type: application/yaml" \
+                --data-binary "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: ${NAMESPACE}" \
+                http://localhost:${PROXY_PORT}/api/v1/namespaces || true
               
               echo "🔍 Checking if deployment exists..."
-              DEPLOYMENT_EXISTS=$(kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${NAMESPACE} get deployment k8s-playground-backend --no-headers 2>/dev/null | wc -l)
+              DEPLOYMENT_EXISTS=$(curl -s http://localhost:${PROXY_PORT}/apis/apps/v1/namespaces/${NAMESPACE}/deployments/k8s-playground-backend 2>/dev/null | grep -c '"name":"k8s-playground-backend"' || echo 0)
               
               if [ $DEPLOYMENT_EXISTS -eq 0 ]; then
                 echo "📥 Deployment not found. Applying initial configuration from kubernetes-deployment.yaml..."
-                kubectl --kubeconfig ${KUBECONFIG_FILE} apply --validate=false -f kubernetes-deployment.yaml
+                curl -s -X PUT -H "Content-Type: application/yaml" \
+                  --data-binary @kubernetes-deployment.yaml \
+                  http://localhost:${PROXY_PORT}/apis/apps/v1/namespaces/${NAMESPACE}/deployments/k8s-playground-backend
                 echo "⏳ Waiting for deployment to be created..."
                 sleep 5
               else
@@ -119,14 +149,37 @@ pipeline {
               fi
               
               echo "🐳 Updating deployment image to: ${IMAGE}"
-              kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${NAMESPACE} set image deployment/k8s-playground-backend backend=${IMAGE}
+              # Patch the deployment image
+              PATCH_DATA="{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"backend\",\"image\":\"${IMAGE}\"}]}}}}"
+              curl -s -X PATCH -H "Content-Type: application/strategic-merge-patch+json" \
+                --data-binary "$PATCH_DATA" \
+                http://localhost:${PROXY_PORT}/apis/apps/v1/namespaces/${NAMESPACE}/deployments/k8s-playground-backend
               
               echo "⏳ Waiting for rollout to complete (timeout: 5m)..."
-              kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${NAMESPACE} rollout status deployment/k8s-playground-backend --timeout=5m
+              # Wait for rollout by checking deployment status
+              for i in {1..30}; do
+                ROLLOUT_STATUS=$(curl -s http://localhost:${PROXY_PORT}/apis/apps/v1/namespaces/${NAMESPACE}/deployments/k8s-playground-backend | grep -c '"availableReplicas":1' || echo 0)
+                if [ $ROLLOUT_STATUS -eq 1 ]; then
+                  echo "✅ Deployment rolled out successfully"
+                  break
+                fi
+                echo "Waiting for rollout... ($i/30)"
+                sleep 10
+              done
+              
+              if [ $ROLLOUT_STATUS -ne 1 ]; then
+                echo "❌ ERROR: Deployment rollout timed out"
+                kill $PROXY_PID 2>/dev/null || true
+                exit 1
+              fi
               
               echo "✅ Deployment successful!"
               echo "Pod status:"
-              kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${NAMESPACE} get pods -l app=k8s-playground,component=backend
+              curl -s http://localhost:${PROXY_PORT}/api/v1/namespaces/${NAMESPACE}/pods?labelSelector=app%3Dk8s-playground%2Ccomponent%3Dbackend
+              
+              # Cleanup proxy
+              echo "Stopping kubectl proxy..."
+              kill $PROXY_PID 2>/dev/null || true
             '''
           }
         }
