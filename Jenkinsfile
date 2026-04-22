@@ -27,11 +27,11 @@ pipeline {
             echo "Node.js not found - installing via nvm..."
             # Install nvm
             curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-            # Load nvm into current shell
+            // Load nvm into current shell
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"
             [ -s "$NVM_DIR/bash_completion" ] && \\. "$NVM_DIR/bash_completion"
-            # Install Node.js 20 LTS
+            // Install Node.js 20 LTS
             nvm install 20
             nvm use 20
           fi
@@ -72,27 +72,27 @@ pipeline {
     }
 
     stage('Build & Push Image') {
-  steps {
-    script {
-      // Use env.IMAGE so it's available in the sh blocks
-      def shortSha = sh(script: 'git rev-parse --short=7 HEAD', returnStdout: true).trim()
-      env.IMAGE_TAG = "${env.BUILD_NUMBER}-${shortSha}"
-      env.IMAGE = "${params.REGISTRY}/${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+      steps {
+        script {
+          // Use env.IMAGE so it's available in the sh blocks
+          def shortSha = sh(script: 'git rev-parse --short=7 HEAD', returnStdout: true).trim()
+          env.IMAGE_TAG = "${env.BUILD_NUMBER}-${shortSha}"
+          env.IMAGE = "${params.REGISTRY}/${env.IMAGE_NAME}:${env.IMAGE_TAG}"
 
-      sh "docker build -t ${env.IMAGE} ."
-      
-      withCredentials([usernamePassword(credentialsId: 'docker-hub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-        sh '''
-          # Log into the base domain only
-          echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin docker.io
+          sh "docker build -t ${env.IMAGE} ."
           
-          # Push using the full image name
-          docker push "$IMAGE"
-        '''
+          withCredentials([usernamePassword(credentialsId: 'docker-hub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+            sh '''
+              # Log into the base domain only
+              echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin docker.io
+              
+              # Push using the full image name
+              docker push "$IMAGE"
+            '''
+          }
+        }
       }
     }
-  }
-}
 
     stage('Deploy to Kubernetes') {
       steps {
@@ -104,14 +104,14 @@ pipeline {
               kubectl --kubeconfig ${KUBECONFIG_FILE} cluster-info
               
               echo "📦 Creating namespace if it doesn't exist..."
-              kubectl --kubeconfig \${KUBECONFIG_FILE} create namespace ${env.NAMESPACE} --dry-run=client -o yaml | kubectl --kubeconfig \${KUBECONFIG_FILE} apply --validate=false -f -
+              kubectl --kubeconfig ${KUBECONFIG_FILE} create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply --validate=false -f -
               
               echo "🔍 Checking if deployment exists..."
               DEPLOYMENT_EXISTS=$(kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${NAMESPACE} get deployment k8s-playground-backend --no-headers 2>/dev/null | wc -l)
               
               if [ $DEPLOYMENT_EXISTS -eq 0 ]; then
                 echo "📥 Deployment not found. Applying initial configuration from kubernetes-deployment.yaml..."
-                kubectl --kubeconfig \${KUBECONFIG_FILE} apply --validate=false -f kubernetes-deployment.yaml
+                kubectl --kubeconfig ${KUBECONFIG_FILE} apply --validate=false -f kubernetes-deployment.yaml
                 echo "⏳ Waiting for deployment to be created..."
                 sleep 5
               else
