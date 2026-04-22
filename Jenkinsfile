@@ -19,11 +19,17 @@ pipeline {
     }
 
     stage('Install & Test') {
-      steps {
-        sh 'npm ci'
-        sh 'npm test || true'
-      }
+  steps {
+    withNodeJS('NodeJS') {  // Replace with your configured installation name
+      sh '''
+        echo "Node version: $(node -v)"
+        echo "NPM version: $(npm -v)"
+        npm ci
+        npm test || true
+      '''
     }
+  }
+}
 
     stage('Validate Deployment Prerequisites') {
       steps {
