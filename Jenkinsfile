@@ -72,27 +72,27 @@ pipeline {
     }
 
     stage('Build & Push Image') {
-      steps {
-        script {
-          def shortSha = sh(script: 'git rev-parse --short=7 HEAD', returnStdout: true).trim()
-          env.IMAGE_TAG = "${env.BUILD_NUMBER}-${shortSha}"
-          env.IMAGE = "${params.REGISTRY}/${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+  steps {
+    script {
+      // Use env.IMAGE so it's available in the sh blocks
+      def shortSha = sh(script: 'git rev-parse --short=7 HEAD', returnStdout: true).trim()
+      env.IMAGE_TAG = "${env.BUILD_NUMBER}-${shortSha}"
+      env.IMAGE = "${params.REGISTRY}/${env.IMAGE_NAME}:${env.IMAGE_TAG}"
 
-          echo "🔨 Building image: ${env.IMAGE}"
-          sh "docker build -t ${env.IMAGE} ."
+      sh "docker build -t ${env.IMAGE} ."
+      
+      withCredentials([usernamePassword(credentialsId: 'docker-hub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+        sh '''
+          # Log into the base domain only
+          echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin docker.io
           
-          echo "📤 Pushing image to registry..."
-          withCredentials([usernamePassword(credentialsId: 'docker-hub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-            sh '''
-              echo "🔐 Logging into registry..."
-              echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin ${REGISTRY}
-              docker push ${IMAGE}
-              echo "✅ Image pushed: ${IMAGE}"
-            '''
-          }
-        }
+          # Push using the full image name
+          docker push "$IMAGE"
+        '''
       }
     }
+  }
+}
 
     stage('Deploy to Kubernetes') {
       steps {
