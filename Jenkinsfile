@@ -104,14 +104,14 @@ pipeline {
               kubectl --kubeconfig ${KUBECONFIG_FILE} cluster-info
               
               echo "📦 Creating namespace if it doesn't exist..."
-              kubectl --kubeconfig ${KUBECONFIG_FILE} create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+              kubectl --kubeconfig \${KUBECONFIG_FILE} create namespace ${env.NAMESPACE} --dry-run=client -o yaml | kubectl --kubeconfig \${KUBECONFIG_FILE} apply --validate=false -f -
               
               echo "🔍 Checking if deployment exists..."
               DEPLOYMENT_EXISTS=$(kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${NAMESPACE} get deployment k8s-playground-backend --no-headers 2>/dev/null | wc -l)
               
               if [ $DEPLOYMENT_EXISTS -eq 0 ]; then
                 echo "📥 Deployment not found. Applying initial configuration from kubernetes-deployment.yaml..."
-                kubectl --kubeconfig ${KUBECONFIG_FILE} apply -f kubernetes-deployment.yaml
+                kubectl --kubeconfig \${KUBECONFIG_FILE} apply --validate=false -f kubernetes-deployment.yaml
                 echo "⏳ Waiting for deployment to be created..."
                 sleep 5
               else
