@@ -22,10 +22,18 @@ pipeline {
       steps {
         sh '''
           set -e
+          # Install Node.js via nvm if not available (avoids sudo)
           if ! command -v node >/dev/null 2>&1; then
-            echo "Node.js not found - installing..."
-            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-            sudo apt-get update && sudo apt-get install -y nodejs
+            echo "Node.js not found - installing via nvm..."
+            # Install nvm
+            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+            # Load nvm into current shell
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+            [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+            # Install Node.js 20 LTS
+            nvm install 20
+            nvm use 20
           fi
           echo "Node version: $(node -v)"
           echo "NPM version: $(npm -v)"
