@@ -237,7 +237,7 @@ metadata:
     app: k8s-playground
     component: backend
 spec:
-  type: ClusterIP
+  type: NodePort
   selector:
     app: k8s-playground
     component: backend
