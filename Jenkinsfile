@@ -1,17 +1,22 @@
 pipeline {
     agent any
 
+    triggers {
+        githubPush()
+    }
+
     parameters {
         string(name: 'REGISTRY', defaultValue: 'docker.io/venky2222', description: 'Container registry')
     }
 
     environment {
-        IMAGE_NAME = "k8s-playground-backend"
-        NAMESPACE  = "k8s-playground"
+        IMAGE_NAME  = "k8s-playground-backend"
+        NAMESPACE   = "k8s-playground"
         KUBE_SERVER = "https://10.128.0.8:6443"
     }
 
     stages {
+
         stage('Checkout') {
             steps {
                 checkout scm
@@ -36,7 +41,6 @@ pipeline {
 
         stage('Validate Deployment Prerequisites') {
             steps {
-                // ✅ FIX #1: credential ID was 'jenkins-k8s-sa-token' — correct ID is 'jenkins-k8s-token'
                 withCredentials([string(credentialsId: 'jenkins-k8s-token', variable: 'K8S_TOKEN')]) {
                     sh '''
                         export KUBECONFIG="${WORKSPACE}/kubeconfig"
@@ -90,40 +94,39 @@ EOF
         }
 
         stage('Deploy to Kubernetes') {
-    steps {
-        withCredentials([string(credentialsId: 'jenkins-k8s-token', variable: 'K8S_TOKEN')]) {
-            sh '''
-                export KUBECONFIG="${WORKSPACE}/kubeconfig"
+            steps {
+                withCredentials([string(credentialsId: 'jenkins-k8s-token', variable: 'K8S_TOKEN')]) {
+                    sh '''
+                        export KUBECONFIG="${WORKSPACE}/kubeconfig"
 
-                echo "🚀 Starting deployment..."
+                        echo "🚀 Starting deployment..."
 
-                kubectl get namespace ${NAMESPACE} || kubectl create namespace ${NAMESPACE}
+                        kubectl get namespace ${NAMESPACE} || kubectl create namespace ${NAMESPACE}
 
-                # ✅ Only apply the full YAML on first-time deploy (deployment doesn't exist yet)
-                if ! kubectl -n ${NAMESPACE} get deployment k8s-playground-backend >/dev/null 2>&1; then
-                    echo "First deploy — applying full manifest..."
-                    kubectl -n ${NAMESPACE} apply -f kubernetes-deployment.yaml
-                else
-                    echo "Deployment exists — rolling image update only..."
-                fi
+                        if ! kubectl -n ${NAMESPACE} get deployment k8s-playground-backend >/dev/null 2>&1; then
+                            echo "First deploy — applying full manifest..."
+                            kubectl -n ${NAMESPACE} apply -f kubernetes-deployment.yaml
+                        else
+                            echo "Deployment exists — rolling image update only..."
+                        fi
 
-                # ✅ This always runs — updates the image on every build
-                kubectl -n ${NAMESPACE} set image deployment/k8s-playground-backend \
-                    backend=${IMAGE} --record
+                        kubectl -n ${NAMESPACE} set image deployment/k8s-playground-backend \
+                            backend=${IMAGE}
 
-                kubectl -n ${NAMESPACE} rollout status deployment/k8s-playground-backend \
-                    --timeout=3m
+                        kubectl -n ${NAMESPACE} rollout status deployment/k8s-playground-backend \
+                            --timeout=3m
 
-                echo "✅ Deployment successful!"
-                kubectl -n ${NAMESPACE} get pods -l app=k8s-playground,component=backend
-            '''
+                        echo "✅ Deployment successful!"
+                        kubectl -n ${NAMESPACE} get pods -l app=k8s-playground,component=backend
+                    '''
+                }
+            }
         }
-    }
-}
+
+    } // ← FIX: closing brace for stages block was missing
 
     post {
         success {
-            // ✅ FIX #2: single quotes → double quotes so ${env.VAR} actually interpolates
             echo """
             ✅ PIPELINE SUCCEEDED
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -135,7 +138,6 @@ EOF
             """
         }
         failure {
-            // ✅ FIX #3: corrected stale credential name in troubleshooting hint
             echo """
             ❌ PIPELINE FAILED
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -151,4 +153,5 @@ EOF
             """
         }
     }
-}
+
+} // ← pipeline closing brace
