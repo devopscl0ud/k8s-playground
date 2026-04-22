@@ -21,7 +21,8 @@ pipeline {
                     if ! command -v node >/dev/null 2>&1; then
                         curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
                         export NVM_DIR="$HOME/.nvm"
-                        [ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"
+                        [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+                        [ -s "$NVM_DIR/bash_completion" ] && . "$NVM_DIR/bash_completion"
                         nvm install 20
                         nvm use 20
                     fi
@@ -134,7 +135,7 @@ EOF
             Namespace: ${env.NAMESPACE}
             
             📋 Troubleshooting:
-            1. Verify jenkins-k8s-token credentials exist in Jenkins
+            1. Verify jenkins-k8s-token credentials exist in Jenkins (System → Global credentials)
             2. Check token value matches what you retrieved from kubectl
             3. Ensure docker-hub-creds credentials exist
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
