@@ -90,29 +90,36 @@ EOF
         }
 
         stage('Deploy to Kubernetes') {
-            steps {
-                withCredentials([string(credentialsId: 'jenkins-k8s-token', variable: 'K8S_TOKEN')]) {
-                    sh '''
-                        export KUBECONFIG="${WORKSPACE}/kubeconfig"
+    steps {
+        withCredentials([string(credentialsId: 'jenkins-k8s-token', variable: 'K8S_TOKEN')]) {
+            sh '''
+                export KUBECONFIG="${WORKSPACE}/kubeconfig"
 
-                        echo "🚀 Starting deployment..."
+                echo "🚀 Starting deployment..."
 
-                        kubectl get namespace ${NAMESPACE} || kubectl create namespace ${NAMESPACE}
+                kubectl get namespace ${NAMESPACE} || kubectl create namespace ${NAMESPACE}
 
-                        if ! kubectl -n ${NAMESPACE} get deployment k8s-playground-backend >/dev/null 2>&1; then
-                            kubectl -n ${NAMESPACE} apply -f kubernetes-deployment.yaml
-                        fi
+                # ✅ Only apply the full YAML on first-time deploy (deployment doesn't exist yet)
+                if ! kubectl -n ${NAMESPACE} get deployment k8s-playground-backend >/dev/null 2>&1; then
+                    echo "First deploy — applying full manifest..."
+                    kubectl -n ${NAMESPACE} apply -f kubernetes-deployment.yaml
+                else
+                    echo "Deployment exists — rolling image update only..."
+                fi
 
-                        kubectl -n ${NAMESPACE} set image deployment/k8s-playground-backend backend=${IMAGE}
-                        kubectl -n ${NAMESPACE} rollout status deployment/k8s-playground-backend --timeout=3m
+                # ✅ This always runs — updates the image on every build
+                kubectl -n ${NAMESPACE} set image deployment/k8s-playground-backend \
+                    backend=${IMAGE} --record
 
-                        echo "✅ Deployment successful!"
-                        kubectl -n ${NAMESPACE} get pods -l app=k8s-playground,component=backend
-                    '''
-                }
-            }
+                kubectl -n ${NAMESPACE} rollout status deployment/k8s-playground-backend \
+                    --timeout=3m
+
+                echo "✅ Deployment successful!"
+                kubectl -n ${NAMESPACE} get pods -l app=k8s-playground,component=backend
+            '''
         }
     }
+}
 
     post {
         success {
