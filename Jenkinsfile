@@ -19,17 +19,21 @@ pipeline {
     }
 
     stage('Install & Test') {
-  steps {
-    withNodeJS('NodeJS') {  // Replace with your configured installation name
-      sh '''
-        echo "Node version: $(node -v)"
-        echo "NPM version: $(npm -v)"
-        npm ci
-        npm test || true
-      '''
+      steps {
+        sh '''
+          set -e
+          if ! command -v node >/dev/null 2>&1; then
+            echo "Node.js not found - installing..."
+            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+            sudo apt-get update && sudo apt-get install -y nodejs
+          fi
+          echo "Node version: $(node -v)"
+          echo "NPM version: $(npm -v)"
+          npm ci
+          npm test || true
+        '''
+      }
     }
-  }
-}
 
     stage('Validate Deployment Prerequisites') {
       steps {
