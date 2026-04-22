@@ -2,7 +2,7 @@ pipeline {
   agent any
 
   triggers {
-    // Requires GitHub plugin: triggers pipeline on push via GitHub webhook
+    // Requires GitHub plugin: triggers pipeline on push via GitHub webhook & added extra line for scm
     githubPush()
   }
 
