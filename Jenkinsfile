@@ -33,7 +33,7 @@ pipeline {
         
         stage('Validate Deployment Prerequisites') {
             steps {
-                withCredentials([string(credentialsId: 'jenkins-k8s-sa-token', variable: 'K8S_TOKEN')]) {
+                withCredentials([string(credentialsId: 'jenkins-k8s-token', variable: 'K8S_TOKEN')]) {
                     sh '''
                         export KUBECONFIG="${WORKSPACE}/kubeconfig"
                         mkdir -p "$(dirname "${KUBECONFIG}")"
@@ -86,7 +86,7 @@ EOF
         
         stage('Deploy to Kubernetes') {
             steps {
-                withCredentials([string(credentialsId: 'jenkins-k8s-sa-token', variable: 'K8S_TOKEN')]) {
+                withCredentials([string(credentialsId: 'jenkins-k8s-token', variable: 'K8S_TOKEN')]) {
                     sh '''
                         export KUBECONFIG="${WORKSPACE}/kubeconfig"
                         
@@ -134,7 +134,7 @@ EOF
             Namespace: ${env.NAMESPACE}
             
             📋 Troubleshooting:
-            1. Verify jenkins-k8s-sa-token credentials exist in Jenkins
+            1. Verify jenkins-k8s-token credentials exist in Jenkins
             2. Check token value matches what you retrieved from kubectl
             3. Ensure docker-hub-creds credentials exist
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
