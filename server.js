@@ -555,6 +555,22 @@ app.get('/api/services', async (req, res) => {
     }
 
     const namespace = req.query.namespace || 'default';
+
+    if (mockMode) {
+      return res.json(mockClusterData.services.filter(s => s.namespace === namespace || namespace === 'all').map(s => ({
+        name: s.name,
+        namespace: s.namespace,
+        type: s.type,
+        clusterIP: s.clusterIP,
+        externalIPs: [],
+        ports: [],
+        selector: {},
+        creationTimestamp: new Date().toISOString(),
+        age: '10d',
+        labels: {}
+      })));
+    }
+
     const response = await k8sApi.listNamespacedService(namespace);
     
     const services = response.body.items.map(service => ({
@@ -593,6 +609,23 @@ app.get('/api/deployments', async (req, res) => {
     }
 
     const namespace = req.query.namespace || 'default';
+
+    if (mockMode) {
+      return res.json(mockClusterData.deployments.filter(d => d.namespace === namespace || namespace === 'all').map(d => ({
+        name: d.name,
+        namespace: d.namespace,
+        replicas: d.replicas,
+        readyReplicas: d.readyReplicas,
+        availableReplicas: d.availableReplicas,
+        updatedReplicas: d.replicas,
+        containers: [{name: 'app', image: 'nginx:latest'}],
+        creationTimestamp: new Date().toISOString(),
+        age: '5d',
+        labels: {},
+        conditions: []
+      })));
+    }
+
     const response = await k8sAppsApi.listNamespacedDeployment(namespace);
     
     const deployments = response.body.items.map(deployment => ({
@@ -632,6 +665,25 @@ app.get('/api/namespaces', async (req, res) => {
     const clientId = req.ip || 'anonymous';
     if (!checkRateLimit(clientId)) {
       return res.status(429).json({ error: 'Rate limit exceeded' });
+    }
+
+    if (mockMode) {
+      return res.json([
+        {
+          name: 'default',
+          status: 'Active',
+          creationTimestamp: new Date().toISOString(),
+          age: '30d',
+          labels: {}
+        },
+        {
+          name: 'kube-system',
+          status: 'Active',
+          creationTimestamp: new Date().toISOString(),
+          age: '30d',
+          labels: {}
+        }
+      ]);
     }
 
     const response = await k8sApi.listNamespace();
@@ -687,6 +739,25 @@ io.on('connection', (socket) => {
 
 async function sendClusterUpdate(socket) {
   try {
+    if (mockMode) {
+      const clusterData = {
+        connected: true,
+        nodes: mockClusterData.nodes.map(node => ({
+          name: node.name,
+          status: node.status,
+          ready: node.ready,
+          cpu: node.cpu,
+          memory: node.memory
+        })),
+        pods: mockClusterData.pods.length,
+        services: mockClusterData.services.length,
+        deployments: mockClusterData.deployments.length,
+        timestamp: new Date().toISOString()
+      };
+      socket.emit('cluster-update', clusterData);
+      return;
+    }
+
     const [nodes, pods, services, deployments] = await Promise.allSettled([
       k8sApi.listNode(),
       k8sApi.listPodForAllNamespaces(),
