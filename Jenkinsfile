@@ -8,7 +8,7 @@ pipeline {
   environment {
     IMAGE_NAME = "k8s-playground-backend"
     NAMESPACE = "k8s-playground"
-    KUBE_CONFIG = ""  // Not needed with token auth
+    KUBE_API_SERVER = "https://10.128.0.8:6443"  // From your kubectl config view
   }
 
   stages {
@@ -20,14 +20,23 @@ pipeline {
 
     stage('Install & Test') {
       steps {
-        // Optional: Install Node.js if not pre-installed on agent
         sh '''
+          set -e
+          # Install Node.js via nvm if not available (avoids sudo)
           if ! command -v node >/dev/null 2>&1; then
-            echo "Installing Node.js..."
-            # For Ubuntu/Debian agents:
-            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-            sudo apt-get install -y nodejs
+            echo "Node.js not found - installing via nvm..."
+            # Install nvm
+            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+            # Load nvm into current shell
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"
+            [ -s "$NVM_DIR/bash_completion" ] && \\. "$NVM_DIR/bash_completion"
+            # Install Node.js 20 LTS
+            nvm install 20
+            nvm use 20
           fi
+          echo "Node version: $(node -v)"
+          echo "NPM version: $(npm -v)"
           npm ci
           npm test || true
         '''
@@ -36,21 +45,20 @@ pipeline {
 
     stage('Validate Deployment Prerequisites') {
       steps {
-        // Using the service account token credentials
-        withCredentials([string(credentialsId: 'jenkins-k8s-token', variable: 'K8S_TOKEN')]) {
+        withCredentials([string(credentialsId: 'jenkins-k8s-sa-token', variable: 'K8S_TOKEN')]) {
           sh '''
-            # Set up kubectl to use the token
+            # Set up kubectl to use the service account token
             export KUBECONFIG="${WORKSPACE}/kubeconfig"
             
-            # Create a minimal kubeconfig using the token
+            # Create a proper kubeconfig using the token
             mkdir -p "$(dirname "${KUBECONFIG}")"
             cat > "${KUBECONFIG}" <<EOF
 apiVersion: v1
 kind: Config
 clusters:
 - cluster:
-    server: https://<your-api-server>:6443  # REPLACE WITH YOUR API SERVER
-    insecure-skip-tls-verify: true  # Set to false if you have valid certs
+    server: ${KUBE_API_SERVER}
+    insecure-skip-tls-verify: true  # For simplicity; use CA cert in production
   name: cluster
 contexts:
 - context:
@@ -67,6 +75,7 @@ EOF
             echo "✓ kubeconfig created with service account token"
             kubectl cluster-info
             kubectl auth can-i create deployments  # Should return "yes"
+            kubectl auth can-i get pods            # Should return "yes"
           '''
         }
       }
@@ -92,9 +101,34 @@ EOF
 
     stage('Deploy to Kubernetes') {
       steps {
-        withCredentials([string(credentialsId: 'jenkins-k8s-token', variable: 'K8S_TOKEN')]) {
+        withCredentials([string(credentialsId: 'jenkins-k8s-sa-token', variable: 'K8S_TOKEN')]) {
           sh '''
+            # Set up kubectl to use the service account token
             export KUBECONFIG="${WORKSPACE}/kubeconfig"
+            
+            # Create a proper kubeconfig using the token
+            mkdir -p "$(dirname "${KUBECONFIG}")"
+            cat > "${KUBECONFIG}" <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: ${KUBE_API_SERVER}
+    insecure-skip-tls-verify: true
+  name: cluster
+contexts:
+- context:
+    cluster: cluster
+    user: jenkins
+  name: jenkins-context
+current-context: jenkins-context
+users:
+- name: jenkins
+  user:
+    token: ${K8S_TOKEN}
+EOF
+            
+            echo "🚀 Starting deployment..."
             
             echo "Creating namespace if needed..."
             kubectl get namespace ${NAMESPACE} || kubectl create namespace ${NAMESPACE}
@@ -145,7 +179,7 @@ EOF
       Namespace: ${env.NAMESPACE}
       
       📋 Troubleshooting steps:
-      1. Verify jenkins-k8s-token credentials are set in Jenkins
+      1. Verify jenkins-k8s-sa-token credentials are set in Jenkins
       2. Check kubectl can connect to cluster with the token
       3. Ensure docker-hub-creds have valid Docker Hub token
       4. Review pod logs: kubectl -n ${env.NAMESPACE} logs -l app=k8s-playground
