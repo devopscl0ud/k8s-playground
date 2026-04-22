@@ -95,44 +95,45 @@ pipeline {
 }
 
     stage('Deploy to Kubernetes') {
-      steps {
-        script {
-          withCredentials([file(credentialsId: 'kubeconfig-credentials', variable: 'KUBECONFIG_FILE')]) {
-            sh '''
-              set -e
-              echo "🔧 Verifying cluster connection..."
-              kubectl --kubeconfig ${KUBECONFIG_FILE} cluster-info
-              
-              echo "📦 Creating namespace if it doesn't exist..."
-              kubectl --kubeconfig ${KUBECONFIG_FILE} create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
-              
-              echo "🔍 Checking if deployment exists..."
-              DEPLOYMENT_EXISTS=$(kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${NAMESPACE} get deployment k8s-playground-backend --no-headers 2>/dev/null | wc -l)
-              
-              if [ $DEPLOYMENT_EXISTS -eq 0 ]; then
-                echo "📥 Deployment not found. Applying initial configuration from kubernetes-deployment.yaml..."
-                kubectl --kubeconfig ${KUBECONFIG_FILE} apply -f kubernetes-deployment.yaml
-                echo "⏳ Waiting for deployment to be created..."
-                sleep 5
-              else
-                echo "✅ Deployment already exists"
-              fi
-              
-              echo "🐳 Updating deployment image to: ${IMAGE}"
-              kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${NAMESPACE} set image deployment/k8s-playground-backend backend=${IMAGE}
-              
-              echo "⏳ Waiting for rollout to complete (timeout: 5m)..."
-              kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${NAMESPACE} rollout status deployment/k8s-playground-backend --timeout=5m
-              
-              echo "✅ Deployment successful!"
-              echo "Pod status:"
-              kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${NAMESPACE} get pods -l app=k8s-playground,component=backend
-            '''
-          }
-        }
+  steps {
+    script {
+      withCredentials([file(credentialsId: 'kubeconfig-credentials', variable: 'KUBECONFIG_FILE')]) {
+        sh '''
+          set -e
+          echo "🔧 Verifying cluster connection..."
+          kubectl --kubeconfig ${KUBECONFIG_FILE} cluster-info
+          
+          echo "📦 Creating namespace if it doesn't exist..."
+          # FIXED: Added --kubeconfig to the second part of the pipe
+          kubectl --kubeconfig ${KUBECONFIG_FILE} create namespace ${NAMESPACE} --dry-run=client -o yaml | \
+          kubectl --kubeconfig ${KUBECONFIG_FILE} apply -f -
+          
+          echo "🔍 Checking if deployment exists..."
+          DEPLOYMENT_EXISTS=$(kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${NAMESPACE} get deployment k8s-playground-backend --no-headers 2>/dev/null | wc -l)
+          
+          if [ $DEPLOYMENT_EXISTS -eq 0 ]; then
+            echo "📥 Deployment not found. Applying initial configuration..."
+            # FIXED: Added --kubeconfig here as well
+            kubectl --kubeconfig ${KUBECONFIG_FILE} apply -f kubernetes-deployment.yaml
+            echo "⏳ Waiting for deployment to be created..."
+            sleep 5
+          else
+            echo "✅ Deployment already exists"
+          fi
+          
+          echo "🐳 Updating deployment image to: ${IMAGE}"
+          kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${NAMESPACE} set image deployment/k8s-playground-backend backend=${IMAGE}
+          
+          echo "⏳ Waiting for rollout to complete..."
+          kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${NAMESPACE} rollout status deployment/k8s-playground-backend --timeout=5m
+          
+          echo "✅ Deployment successful!"
+          kubectl --kubeconfig ${KUBECONFIG_FILE} -n ${NAMESPACE} get pods -l app=k8s-playground,component=backend
+        '''
       }
     }
   }
+}
 
   parameters {
     string(name: 'REGISTRY', defaultValue: 'docker.io/venky2222', description: 'Container registry (e.g. docker.io/username or registry.example.com/repo)')
